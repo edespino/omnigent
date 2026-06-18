@@ -27,14 +27,18 @@ Usage::
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import httpx
 import pytest
 
 from tests.e2e.conftest import (
+    configure_mock_llm,
     create_runner_bound_session,
     poll_session_until_terminal,
+    register_inline_agent,
+    reset_mock_llm,
     send_user_message_to_session,
     upload_agent,
 )
@@ -49,6 +53,33 @@ _ASK_DEMO_DIR = Path(__file__).resolve().parents[1] / "resources" / "agents" / "
 _E2E_PROMPT_POLICY_DIR = (
     Path(__file__).resolve().parents[1] / "_fixtures" / "agents" / "e2e-prompt-policy"
 )
+
+# Shared extra_config for inline label-gate agents (mirrors e2e-label-gate.yaml).
+_LABEL_GATE_EXTRA_CONFIG: dict = {
+    "labels": {"tainted": "0"},
+    "label_schema": {
+        "tainted": {"values": ["0", "1"], "monotonic": "max"},
+    },
+    "policies": {
+        "taint_on_banana": {
+            "type": "function",
+            "handler": "omnigent._e2e_policy_callables.taint_on_banana",
+        },
+        "deny_when_tainted": {
+            "type": "function",
+            "on": ["request"],
+            "condition": {"tainted": "1"},
+            "function": {
+                "path": "omnigent.policies.function.make_fixed_action_callable",
+                "arguments": {
+                    "action": "deny",
+                    "reason": "Conversation is tainted from a prior turn.",
+                    "on_phases": ["request"],
+                },
+            },
+        },
+    },
+}
 
 
 @pytest.fixture(scope="session")
@@ -139,15 +170,39 @@ def _post_user_message(client: httpx.Client, session_id: str, text: str) -> http
 
 def test_policy_gate_allows_clean_message(
     http_client: httpx.Client,
-    policy_gate_agent: str,
     live_runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
     """A normal message (no sentinel) passes through the
     policy → reaches the LLM → gets a real response. If
     this regresses, the policy is over-firing and blocking
     legitimate traffic."""
+    model = f"mock-pg-clean-{uuid.uuid4().hex[:6]}"
+    reset_mock_llm(mock_llm_server_url)
+    agent_name = register_inline_agent(
+        http_client,
+        name=f"pg-clean-{uuid.uuid4().hex[:6]}",
+        harness="openai-agents",
+        model=model,
+        profile="",
+        prompt="You are a minimal test agent. Respond briefly.",
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
+        extra_config={
+            "policies": {
+                "block_sentinel": {
+                    "type": "function",
+                    "handler": "omnigent._e2e_policy_callables.block_on_sentinel",
+                },
+            },
+        },
+    )
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": "Hello there friend!"}],
+        key=model,
+    )
     session_id = create_runner_bound_session(
-        http_client, agent_name=policy_gate_agent, runner_id=live_runner_id
+        http_client, agent_name=agent_name, runner_id=live_runner_id
     )
     rid = send_user_message_to_session(
         http_client,
@@ -161,13 +216,7 @@ def test_policy_gate_allows_clean_message(
     # not turn the turn into a failure.
     assert body["status"] == "completed", f"Unexpected status: {body.get('error')}"
     text = _extract_all_assistant_text(body)
-    # Real LLM response — just verify something came back
-    # (content varies; checking for non-empty is the right
-    # granularity since we're testing policy pass-through,
-    # not LLM output quality).
-    assert len(text.strip()) > 0, (
-        "Expected real LLM output after policy ALLOW; got empty response."
-    )
+    assert len(text.strip()) > 0, "Expected LLM output after policy ALLOW; got empty response."
     # Sentinel must NOT appear — the clean path doesn't
     # invoke the DENY branch.
     assert "[Denied by policy" not in text
@@ -262,8 +311,8 @@ def test_policy_gate_deny_persists_to_history(
 
 def test_label_gate_taint_persists_across_turns(
     http_client: httpx.Client,
-    label_gate_agent: str,
     live_runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
     """Turn 1: user triggers FunctionPolicy that writes
     ``tainted: "1"``. Turn 2: clean input, but
@@ -275,8 +324,25 @@ def test_label_gate_taint_persists_across_turns(
     condition gates on the next turn — the core IFC-through-
     labels pattern. Both turns run on the same runner-bound
     session so turn 2 sees turn 1's persisted label."""
+    model = f"mock-lg-taint-{uuid.uuid4().hex[:6]}"
+    reset_mock_llm(mock_llm_server_url)
+    agent_name = register_inline_agent(
+        http_client,
+        name=f"lg-taint-{uuid.uuid4().hex[:6]}",
+        harness="openai-agents",
+        model=model,
+        profile="",
+        prompt="You are a minimal test agent. Respond briefly.",
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
+        extra_config=_LABEL_GATE_EXTRA_CONFIG,
+    )
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": "Hi there!"}],
+        key=model,
+    )
     session_id = create_runner_bound_session(
-        http_client, agent_name=label_gate_agent, runner_id=live_runner_id
+        http_client, agent_name=agent_name, runner_id=live_runner_id
     )
     # Turn 1: trigger the taint. ALLOW-with-set_labels, so the message
     # is queued and the LLM runs (deny_when_tainted hasn't fired yet —
@@ -311,15 +377,32 @@ def test_label_gate_taint_persists_across_turns(
 
 def test_label_gate_untainted_conversation_passes(
     http_client: httpx.Client,
-    label_gate_agent: str,
     live_runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
     """A conversation that never triggers taint_on_banana
     should pass every turn — the condition
     ``tainted: "1"`` never matches against the default
     ``tainted: "0"`` seed."""
+    model = f"mock-lg-clean-{uuid.uuid4().hex[:6]}"
+    reset_mock_llm(mock_llm_server_url)
+    agent_name = register_inline_agent(
+        http_client,
+        name=f"lg-clean-{uuid.uuid4().hex[:6]}",
+        harness="openai-agents",
+        model=model,
+        profile="",
+        prompt="You are a minimal test agent. Respond briefly.",
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
+        extra_config=_LABEL_GATE_EXTRA_CONFIG,
+    )
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": "Hello! Nice to meet you."}],
+        key=model,
+    )
     session_id = create_runner_bound_session(
-        http_client, agent_name=label_gate_agent, runner_id=live_runner_id
+        http_client, agent_name=agent_name, runner_id=live_runner_id
     )
     rid = send_user_message_to_session(
         http_client,
@@ -337,8 +420,8 @@ def test_label_gate_untainted_conversation_passes(
 
 def test_label_gate_persisted_labels_in_store(
     http_client: httpx.Client,
-    label_gate_agent: str,
     live_runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
     """After the taint turn, the ``tainted`` label is
     persisted to ``conversation_labels`` — verifiable via
@@ -348,10 +431,27 @@ def test_label_gate_persisted_labels_in_store(
     Not just an in-memory snapshot — the labels survive
     workflow restarts, which is what Phase 1's store API
     guarantees."""
-    session_id = create_runner_bound_session(
-        http_client, agent_name=label_gate_agent, runner_id=live_runner_id
+    model = f"mock-lg-persist-{uuid.uuid4().hex[:6]}"
+    reset_mock_llm(mock_llm_server_url)
+    agent_name = register_inline_agent(
+        http_client,
+        name=f"lg-persist-{uuid.uuid4().hex[:6]}",
+        harness="openai-agents",
+        model=model,
+        profile="",
+        prompt="You are a minimal test agent. Respond briefly.",
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
+        extra_config=_LABEL_GATE_EXTRA_CONFIG,
     )
-    # Turn 1: taint (ALLOW + set_labels, real LLM turn).
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": "Acknowledged."}],
+        key=model,
+    )
+    session_id = create_runner_bound_session(
+        http_client, agent_name=agent_name, runner_id=live_runner_id
+    )
+    # Turn 1: taint (ALLOW + set_labels, mock LLM turn).
     rid1 = send_user_message_to_session(
         http_client, session_id=session_id, content="BANANA_TRIGGER, please acknowledge."
     )
@@ -372,10 +472,10 @@ def test_label_gate_persisted_labels_in_store(
 
 def test_no_guardrails_agent_unaffected(
     http_client: httpx.Client,
-    archer_agent: str,
     live_runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
-    """Archer has no guardrails block — the engine is a
+    """An agent with no guardrails block — the engine is a
     no-op, every INPUT ALLOWs, workflow runs normally.
 
     Regression test for the Phase 6 wiring: if
@@ -385,8 +485,24 @@ def test_no_guardrails_agent_unaffected(
     Detecting this at the e2e level catches bugs the unit
     tests' `noop_engine` doesn't cover (real workflow,
     real message flow, real LLM round-trip)."""
+    model = f"mock-no-guard-{uuid.uuid4().hex[:6]}"
+    reset_mock_llm(mock_llm_server_url)
+    agent_name = register_inline_agent(
+        http_client,
+        name=f"no-guard-{uuid.uuid4().hex[:6]}",
+        harness="openai-agents",
+        model=model,
+        profile="",
+        prompt="You are a minimal test agent. Respond briefly.",
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
+    )
+    configure_mock_llm(
+        mock_llm_server_url,
+        [{"text": "The answer is 4."}],
+        key=model,
+    )
     session_id = create_runner_bound_session(
-        http_client, agent_name=archer_agent, runner_id=live_runner_id
+        http_client, agent_name=agent_name, runner_id=live_runner_id
     )
     rid = send_user_message_to_session(
         http_client,
@@ -396,9 +512,9 @@ def test_no_guardrails_agent_unaffected(
     body = poll_session_until_terminal(
         http_client, session_id=session_id, response_id=rid, timeout=120
     )
-    assert body["status"] == "completed", f"Archer (no guardrails) failed: {body.get('error')}"
+    assert body["status"] == "completed", f"No-guardrails agent failed: {body.get('error')}"
     text = _extract_all_assistant_text(body)
-    # Real LLM output — not a policy sentinel.
+    # Mock LLM output — not a policy sentinel.
     assert len(text.strip()) > 0
     assert "[Denied by policy" not in text
 
@@ -421,6 +537,7 @@ def test_prompt_policy_allow_path_reaches_llm(
     http_client: httpx.Client,
     prompt_policy_agent: str,
     live_runner_id: str,
+    using_mock_llm: bool,
 ) -> None:
     """
     Non-Canadian input → classifier ALLOWs → agent LLM runs →
@@ -428,6 +545,8 @@ def test_prompt_policy_allow_path_reaches_llm(
     works end-to-end through the real LLM, the policy engine
     composes ALLOW, and the full turn completes normally.
     """
+    if using_mock_llm:
+        pytest.skip("requires real LLM (prompt policy classifier)")
     session_id = create_runner_bound_session(
         http_client, agent_name=prompt_policy_agent, runner_id=live_runner_id
     )
@@ -459,6 +578,7 @@ def test_prompt_policy_deny_path_short_circuits(
     http_client: httpx.Client,
     prompt_policy_agent: str,
     live_runner_id: str,
+    using_mock_llm: bool,
 ) -> None:
     """
     Canadian-topic input → classifier DENYs → the events endpoint
@@ -474,6 +594,8 @@ def test_prompt_policy_deny_path_short_circuits(
     classifier-wiring proof and a gateway-routing regression
     guard.
     """
+    if using_mock_llm:
+        pytest.skip("requires real LLM (prompt policy classifier)")
     session_id = create_runner_bound_session(
         http_client, agent_name=prompt_policy_agent, runner_id=live_runner_id
     )
