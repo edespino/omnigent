@@ -518,19 +518,17 @@ async def _attach_terminal_resource(prepared: PreparedKiroTerminal) -> None:
 
 
 async def _attach_direct_tmux(socket_path: Path, tmux_target: str) -> None:
-    """Attach the current terminal directly to the runner-owned tmux pane."""
-    process = await asyncio.create_subprocess_exec(
-        "tmux",
-        "-S",
-        str(socket_path),
-        "-f",
-        os.devnull,
-        "attach",
-        "-t",
-        tmux_target,
-        env=_tmux_attach_env(),
-    )
-    await process.wait()
+    """Attach the current terminal directly to the runner-owned tmux pane.
+
+    Delegates to :func:`omnigent.terminals.direct_attach.attach_direct_tmux`,
+    which detaches the local client once the inner CLI exits so the attach
+    returns instead of hanging on the ``remain-on-exit`` dead pane (#540). Kiro
+    restricts the attach env to :data:`_TMUX_ATTACH_ENV_ALLOWLIST` rather than
+    inheriting the full environment.
+    """
+    from omnigent.terminals.direct_attach import attach_direct_tmux
+
+    await attach_direct_tmux(socket_path, tmux_target, env=_tmux_attach_env())
 
 
 def _tmux_attach_env() -> dict[str, str]:

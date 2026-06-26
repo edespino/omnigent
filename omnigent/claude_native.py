@@ -2006,13 +2006,15 @@ async def _attach_direct_tmux(
 
     Lower latency than the WebSocket PTY relay because there is no
     server round-trip — the local TTY drives the runner's private tmux
-    server over its Unix socket. ``TMUX`` is dropped from the child
-    environment so a user who runs ``omnigent claude`` from inside
-    their own tmux can still attach to Omnigent' server. After the
-    ``tmux attach`` child exits, a ``has-session`` probe distinguishes a
-    user *detach* (session still alive → keep the Omnigent terminal resource
-    live) from Claude *exiting* (session gone → caller closes the
-    resource), matching the WebSocket path's 4405-vs-4404 semantics.
+    server over its Unix socket. Delegates to
+    :func:`omnigent.terminals.direct_attach.attach_direct_tmux`, which
+    drops ``TMUX`` from the child environment (so a user inside their own
+    tmux can still attach), detaches the local client the moment the pane
+    dies (so ``/exit`` returns instead of hanging on the
+    ``remain-on-exit`` dead pane), and classifies the outcome on the
+    pane-dead flag — a user *detach* (live pane → keep the Omnigent
+    terminal resource) vs Claude *exiting* (dead/gone pane → caller closes
+    the resource), matching the WebSocket path's 4405-vs-4404 semantics.
 
     :param socket_path: Runner tmux server socket path.
     :param tmux_target: tmux ``-t`` target to attach, e.g. ``"main"``.
@@ -2022,29 +2024,13 @@ async def _attach_direct_tmux(
         outlives the attach (user detached), else
         :attr:`_AttachOutcome.EXITED`.
     """
-    from omnigent.terminals.ws_bridge import _tmux_session_alive
+    from omnigent.terminals.direct_attach import AttachOutcome, attach_direct_tmux
 
     startup_profiler = startup_profiler or StartupProfiler(name="omnigent claude", enabled=False)
-    env = dict(os.environ)
-    env.pop("TMUX", None)
     startup_profiler.mark("starting tmux attach subprocess", detail=f"target={tmux_target}")
-    process = await asyncio.create_subprocess_exec(
-        "tmux",
-        "-S",
-        str(socket_path),
-        "-f",
-        os.devnull,
-        "attach",
-        "-t",
-        tmux_target,
-        env=env,
-    )
-    startup_profiler.mark("tmux attach subprocess started")
-    await process.wait()
+    outcome = await attach_direct_tmux(socket_path, tmux_target)
     startup_profiler.mark("tmux attach subprocess exited")
-    if await _tmux_session_alive(str(socket_path), tmux_target):
-        return _AttachOutcome.DETACHED
-    return _AttachOutcome.EXITED
+    return _AttachOutcome.DETACHED if outcome is AttachOutcome.DETACHED else _AttachOutcome.EXITED
 
 
 async def _attach_with_transcript_forwarder(

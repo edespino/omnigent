@@ -1404,32 +1404,15 @@ def _direct_tmux_unavailable_reason(prepared: PreparedCodexTerminal) -> str | No
 
 
 async def _attach_direct_tmux(socket_path: Path, tmux_target: str) -> None:
-    """
-    Attach the current terminal directly to the runner-owned tmux pane.
+    """Attach the current terminal directly to the runner-owned tmux pane.
 
-    This avoids the local WebSocket + PTY relay used for browser and
-    non-local runner attaches. ``TMUX`` is removed from the child
-    environment so users who run ``omnigent codex`` inside their own
-    tmux session can still attach to Omnigent' private tmux server.
-
-    :param socket_path: Runner tmux socket path.
-    :param tmux_target: Tmux target to attach, e.g. ``"main"``.
-    :returns: None after the attach process exits.
+    Delegates to :func:`omnigent.terminals.direct_attach.attach_direct_tmux`,
+    which detaches the local client once the inner CLI exits so the attach
+    returns instead of hanging on the ``remain-on-exit`` dead pane (#540).
     """
-    env = dict(os.environ)
-    env.pop("TMUX", None)
-    process = await asyncio.create_subprocess_exec(
-        "tmux",
-        "-S",
-        str(socket_path),
-        "-f",
-        os.devnull,
-        "attach",
-        "-t",
-        tmux_target,
-        env=env,
-    )
-    await process.wait()
+    from omnigent.terminals.direct_attach import attach_direct_tmux
+
+    await attach_direct_tmux(socket_path, tmux_target)
 
 
 async def _create_codex_session(

@@ -539,24 +539,15 @@ async def _attach_terminal_resource(prepared: PreparedGooseTerminal) -> None:
 
 
 async def _attach_direct_tmux(socket_path: Path, tmux_target: str) -> None:
-    """Attach the current terminal directly to the runner-owned tmux pane."""
-    # ``os.environ.copy()`` returns a plain-dict copy without tripping the
-    # exfil-scan wholesale-environ-dump shape; this only drops TMUX before
-    # handing the env to the local tmux attach subprocess.
-    env = os.environ.copy()
-    env.pop("TMUX", None)
-    process = await asyncio.create_subprocess_exec(
-        "tmux",
-        "-S",
-        str(socket_path),
-        "-f",
-        os.devnull,
-        "attach",
-        "-t",
-        tmux_target,
-        env=env,
-    )
-    await process.wait()
+    """Attach the current terminal directly to the runner-owned tmux pane.
+
+    Delegates to :func:`omnigent.terminals.direct_attach.attach_direct_tmux`,
+    which detaches the local client once the inner CLI exits so the attach
+    returns instead of hanging on the ``remain-on-exit`` dead pane (#540).
+    """
+    from omnigent.terminals.direct_attach import attach_direct_tmux
+
+    await attach_direct_tmux(socket_path, tmux_target)
 
 
 def _direct_tmux_unavailable_reason(prepared: PreparedGooseTerminal) -> str | None:

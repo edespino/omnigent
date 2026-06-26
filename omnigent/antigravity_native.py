@@ -56,7 +56,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import shutil
 import sys
 import time
@@ -1320,11 +1319,14 @@ async def _attach_direct_tmux(socket_path: Path, tmux_target: str) -> _AttachOut
     Attach the current terminal directly to the runner-owned tmux pane.
 
     Lower latency than the WebSocket PTY relay because there is no server
-    round-trip. ``TMUX`` is dropped from the child environment so a user
-    who runs ``omnigent antigravity`` from inside their own tmux can still
-    attach to Omnigent's private tmux server. After the attach child
-    exits, a ``has-session`` probe distinguishes a user *detach* (session
-    still alive) from agy *exiting* (session gone).
+    round-trip. Delegates to
+    :func:`omnigent.terminals.direct_attach.attach_direct_tmux`, which
+    drops ``TMUX`` from the child environment (so a user inside their own
+    tmux can still attach), detaches the local client the moment the pane
+    dies (so ``/exit`` returns instead of hanging on the
+    ``remain-on-exit`` dead pane), and classifies the outcome on the
+    pane-dead flag — a user *detach* (live pane) vs agy *exiting*
+    (dead/gone pane).
 
     :param socket_path: Runner tmux server socket path.
     :param tmux_target: tmux ``-t`` target to attach, e.g. ``"main"``.
@@ -1332,25 +1334,10 @@ async def _attach_direct_tmux(socket_path: Path, tmux_target: str) -> _AttachOut
         outlives the attach (user detached), else
         :attr:`_AttachOutcome.EXITED`.
     """
-    from omnigent.terminals.ws_bridge import _tmux_session_alive
+    from omnigent.terminals.direct_attach import AttachOutcome, attach_direct_tmux
 
-    env = os.environ.copy()
-    env.pop("TMUX", None)
-    process = await asyncio.create_subprocess_exec(
-        "tmux",
-        "-S",
-        str(socket_path),
-        "-f",
-        os.devnull,
-        "attach",
-        "-t",
-        tmux_target,
-        env=env,
-    )
-    await process.wait()
-    if await _tmux_session_alive(str(socket_path), tmux_target):
-        return _AttachOutcome.DETACHED
-    return _AttachOutcome.EXITED
+    outcome = await attach_direct_tmux(socket_path, tmux_target)
+    return _AttachOutcome.DETACHED if outcome is AttachOutcome.DETACHED else _AttachOutcome.EXITED
 
 
 async def _create_antigravity_session(
