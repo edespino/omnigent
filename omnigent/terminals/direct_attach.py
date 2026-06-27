@@ -232,9 +232,7 @@ async def attach_direct_tmux(
         stdout=stdio,
         stderr=stdio,
     )
-    watcher = asyncio.create_task(
-        _end_attach_on_inner_exit(socket_path, tmux_target, process)
-    )
+    watcher = asyncio.create_task(_end_attach_on_inner_exit(socket_path, tmux_target, process))
     try:
         await process.wait()
     finally:

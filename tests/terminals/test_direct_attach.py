@@ -82,6 +82,43 @@ def _wait_pane_dead(socket: Path, target: str = "main") -> None:
     raise AssertionError("inner pane never reported dead")
 
 
+def _start_dead_pane_session(socket: Path, target: str = "main") -> None:
+    """
+    Start a session whose pane is dead but *kept* by ``remain-on-exit``.
+
+    The inner command blocks on stdin so the server stays alive while persistence
+    is applied; only then is the pane released to exit. A command that exits
+    instantly (``sh -c 'exit 0'``) races the default ``exit-empty``, which tears
+    the server down before ``remain-on-exit`` is set and leaves ``set-option``
+    talking to a dead socket.
+    """
+    subprocess.run(
+        [
+            *_tmux_base(socket),
+            "new-session",
+            "-d",
+            "-s",
+            target,
+            "-x",
+            "80",
+            "-y",
+            "24",
+            "sh -c 'read _ignored; exit 0'",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    _set_persistence(socket)
+    # Release the blocked ``read`` so the pane exits *after* persistence is set;
+    # remain-on-exit then keeps the dead pane instead of dropping the server.
+    subprocess.run(
+        [*_tmux_base(socket), "send-keys", "-t", target, "Enter"],
+        check=True,
+        capture_output=True,
+    )
+    _wait_pane_dead(socket, target)
+
+
 @pytest.mark.skipif(not _HAS_TMUX, reason="requires a real tmux binary")
 @pytest.mark.asyncio
 async def test_attach_returns_exited_when_pane_is_dead(tmp_path: Path) -> None:
@@ -94,24 +131,7 @@ async def test_attach_returns_exited_when_pane_is_dead(tmp_path: Path) -> None:
     """
     with _short_socket_dir() as sock_dir:
         socket = sock_dir / "tmux.sock"
-        subprocess.run(
-            [
-                *_tmux_base(socket),
-                "new-session",
-                "-d",
-                "-s",
-                "main",
-                "-x",
-                "80",
-                "-y",
-                "24",
-                "sh -c 'exit 0'",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        _set_persistence(socket)
-        _wait_pane_dead(socket)
+        _start_dead_pane_session(socket)
 
         primary, secondary = pty.openpty()
         try:
@@ -143,24 +163,7 @@ async def test_attach_returns_when_socket_path_removed_while_attached() -> None:
     """
     with _short_socket_dir() as sock_dir:
         socket = sock_dir / "tmux.sock"
-        subprocess.run(
-            [
-                *_tmux_base(socket),
-                "new-session",
-                "-d",
-                "-s",
-                "main",
-                "-x",
-                "80",
-                "-y",
-                "24",
-                "sh -c 'exit 0'",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        _set_persistence(socket)
-        _wait_pane_dead(socket)
+        _start_dead_pane_session(socket)
         server_pid = int(
             subprocess.run(
                 [*_tmux_base(socket), "display-message", "-p", "#{pid}"],
