@@ -55,3 +55,8 @@ dependency).
 - Because polly never merges, cross-PR conflicts surface when the human merges,
   not here. Keeping each parallel task's file scope disjoint is what keeps that
   rare — honor it.
+- A no-PR, local-only variant lives in `local-review` (same isolation and
+  cross-review, but keeps the branch/diff on local disk and PRESERVES the
+  worktree instead of removing it). It is defined as deltas from this skill, so
+  if you change steps 1–3, the co-sign trailer, or the worktree/branch naming
+  here, re-check `local-review` for drift.
