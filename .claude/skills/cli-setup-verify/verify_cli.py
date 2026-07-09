@@ -574,16 +574,17 @@ def _kill_tree(child: pexpect.spawn) -> None:
 
 
 def stop_sandbox_server(args, sandbox: Sandbox) -> None:
-    """Best-effort: stop any background server bound to the sandbox data dir."""
+    """Best-effort: stop any background server bound to the sandbox data dir.
+
+    Kills only the PID recorded in the sandbox's own pidfile. Never invokes
+    ``omnigent server stop``: its orphan sweep health-probes the canonical
+    port (6767) and would kill the developer's REAL server, since the
+    sandbox's empty HOME makes any real server look untracked.
+    """
+    pid_file = sandbox.root / "data" / "local_server.pid"
     with contextlib.suppress(Exception):
-        subprocess.run(
-            [str(args.omnigent), "server", "stop"],
-            env=sandbox.env,
-            cwd=str(args.repo),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        pid = int(pid_file.read_text().strip().splitlines()[0])
+        os.kill(pid, signal.SIGTERM)
 
 
 # --- main -------------------------------------------------------------------
