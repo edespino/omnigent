@@ -66,3 +66,7 @@ anyone needs to read through.
   reviewer edit never reaches the deliverable.
 - Non-blocking issues / suggestions go in the registry as follow-ups; they
   don't block the PR.
+- `local-review` reuses this skill unchanged except that it reads the diff from
+  the local worktree (`git -C .worktrees/<id> diff main...HEAD`) instead of a
+  PR. If you change the diff-fetch step, the reviewer contract, or the
+  vendor-independence rule, re-check `local-review` for drift.
