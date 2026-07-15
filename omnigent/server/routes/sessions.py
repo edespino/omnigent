@@ -20515,26 +20515,27 @@ def create_sessions_router(
                     )
             except Exception:  # noqa: BLE001 -- best-effort snapshot; never block live tail
                 _logger.debug("snapshot: child sessions failed for %s", session_id, exc_info=True)
-            try:
-                resp = await asyncio.wait_for(
-                    # order=asc: the web cache appends each replayed
-                    # ``created`` event, so the replay must arrive in
-                    # creation order or the session's own terminal (always
-                    # created first) lands behind later agent-launched
-                    # ones. limit=1000 (the runner endpoint max) keeps the
-                    # oldest-first window from dropping the newest
-                    # terminals past the default page of 20.
-                    runner_client.get(
-                        f"/v1/sessions/{session_id}/resources/terminals",
-                        params={"order": "asc", "limit": "1000"},
-                    ),
-                    timeout=_SNAPSHOT_RUNNER_TIMEOUT_S,
-                )
-                if resp.status_code == 200:
-                    for item in resp.json().get("data", []):
-                        events.append({"type": "session.resource.created", "resource": item})
-            except Exception:  # noqa: BLE001 -- best-effort snapshot; never block live tail
-                _logger.debug("snapshot: terminals failed for %s", session_id, exc_info=True)
+            if runner_client is not None:
+                try:
+                    resp = await asyncio.wait_for(
+                        # order=asc: the web cache appends each replayed
+                        # ``created`` event, so the replay must arrive in
+                        # creation order or the session's own terminal (always
+                        # created first) lands behind later agent-launched
+                        # ones. limit=1000 (the runner endpoint max) keeps the
+                        # oldest-first window from dropping the newest
+                        # terminals past the default page of 20.
+                        runner_client.get(
+                            f"/v1/sessions/{session_id}/resources/terminals",
+                            params={"order": "asc", "limit": "1000"},
+                        ),
+                        timeout=_SNAPSHOT_RUNNER_TIMEOUT_S,
+                    )
+                    if resp.status_code == 200:
+                        for item in resp.json().get("data", []):
+                            events.append({"type": "session.resource.created", "resource": item})
+                except Exception:  # noqa: BLE001 -- best-effort snapshot; never block live tail
+                    _logger.debug("snapshot: terminals failed for %s", session_id, exc_info=True)
             # Tell the client to (re)fetch the changed-files list rather
             # than fetching it here (avoids a second runner round-trip).
             events.append(
