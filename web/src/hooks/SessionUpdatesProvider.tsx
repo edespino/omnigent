@@ -277,7 +277,15 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
           // position we can't place locally. Membership-affecting deltas
           // (archive/search/connected filters) and updated_at resorting need
           // the same server-side reconciliation.
-          if (missingIds.length > 0 || needsRefetch) scheduleInvalidate();
+          //
+          // Skip the active session: its updated_at bumps on open before the
+          // initial list fetch returns, so it lands in missingIds even though
+          // it isn't a genuinely new session. Its data is covered by
+          // useSession and it's pinned in the sidebar via ActiveChatOverride.
+          const sidebarMissingIds = activeIdRef.current
+            ? missingIds.filter((id) => id !== activeIdRef.current)
+            : missingIds;
+          if (sidebarMissingIds.length > 0 || needsRefetch) scheduleInvalidate();
           return;
         }
       }
