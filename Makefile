@@ -106,8 +106,12 @@ start:
 
 ## status: report whether the local omnigent server is running; exits 0 if up, 1 if not (wraps `omnigent server status`)
 status:
-	@omnigent server status
-	@omnigent server status --json | grep -q '"running": true'
+	@out="$$(omnigent server status)"; \
+	printf '%s\n' "$$out"; \
+	case "$$out" in \
+		"Background server: not running."*) exit 1 ;; \
+		*) exit 0 ;; \
+	esac
 
 ## stop: stop the local omnigent server, no-op if it isn't running (wraps `omnigent server stop`)
 stop:
