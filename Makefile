@@ -106,7 +106,7 @@ start:
 
 ## status: report whether the local omnigent server is running; exits 0 if up, 1 if not (wraps `omnigent server status`)
 status:
-	@out="$$(omnigent server status)"; \
+	@out="$$(omnigent server status)" || exit $$?; \
 	printf '%s\n' "$$out"; \
 	case "$$out" in \
 		"Background server: not running."*) exit 1 ;; \
