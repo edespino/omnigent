@@ -42,7 +42,7 @@ SUBMAKE := $(MAKE)
 
 .DEFAULT_GOAL := update
 .NOTPARALLEL:
-.PHONY: update remotes guard build test install version help
+.PHONY: update remotes guard build test install version help start status stop
 
 ## update: rebase onto upstream main, sync the fork, build+test+install if changed (default)
 update: remotes guard
@@ -99,6 +99,19 @@ version:
 	else \
 		echo "omnigent installed but not on PATH (uv tool bin dir, e.g. ~/.local/bin)" >&2; \
 	fi
+
+## start: start the local omnigent server in the background, reusing one already running (wraps `omnigent server --background`)
+start:
+	@omnigent server --background
+
+## status: report whether the local omnigent server is running; exits 0 if up, 1 if not (wraps `omnigent server status`)
+status:
+	@omnigent server status
+	@omnigent server status --json | grep -q '"running": true'
+
+## stop: stop the local omnigent server, no-op if it isn't running (wraps `omnigent server stop`)
+stop:
+	@omnigent server stop
 
 ## help: list available targets
 help:
